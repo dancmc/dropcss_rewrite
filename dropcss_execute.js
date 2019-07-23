@@ -4,7 +4,7 @@ const expressApp = express();
 const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
 const dropcss = require('dropcss');
-const fs = require('fs');
+const fs = require('fs-extra');
 const minify = require('html-minifier').minify;
 const { List,Map } = require('immutable');
 const commander = require('commander');
@@ -14,7 +14,7 @@ commander
   .version('1.0.0', '-v, --version')
   .usage('[OPTIONS]...')
   .option('-n, --hostname <hostname>', 'Hostname of server for rewritten html')
-  .option('-r, --root <root>', 'Root directory')
+  .option('-r, --root <root>', 'Root directory, MUST be supercache folder')
   .option('-s, --sitelist <sitelist>',"Path to sitelist.txt")
   .option('-p, --password', "Page is password protected")
   .parse(process.argv);
@@ -22,9 +22,10 @@ commander
   console.log(commander.hostname);
   console.log(commander.root);
 
-if(!commander.hostname || !commander.root || !commander.sitelist){
+if(!commander.hostname || !commander.root || !commander.sitelist || !commander.root.endsWith("supercache")){
     commander.help();
 }
+
 
 let auth = commander.password;
 
@@ -90,7 +91,7 @@ setInterval(async ()=>{
             browser = null;
         }
     }
-},30000);
+},120000);
 
 
 // -- SERVER AND PROCESS STUFF --
@@ -429,23 +430,86 @@ function changeDetected(ev, file){
 }
 
 
-watchRootDir(commander.root);
+initialiseSiteList();
 
-function checkSiteList(){
+/*
+    1. On first program run, delete everything and start over, don't know what is out of date :
+        2. Check sitelist
+        3. Delete any changed files fn2
+        4. Create any other non-existent cache folders fn2
+        5. Set a watch on sitelist file
+            6. if changes and exists,
+            7. Delete any changed files fn2
+            8. Create any other non-existent cache folders fn2
+
+
+ */
+function initialiseSiteList(){
+    if(!fs.existsSync(commander.sitelist)){
+        console.log("checkSiteList : Site list does not exist");
+        return;
+    }
+    let rootDir = commander.root;
+    if(!fs.existsSync(rootDir)){
+        fs.mkdirSync(rootDir,{recursive:true});
+    }
+
+    // empty the cache root
+    fs.readdirSync(rootDir,{encoding:'utf8', withFileTypes:true}).forEach(f=>{
+        let path = rootDir+"/"+f.name;
+        if(f.isDirectory()){
+            fs.removeSync(path);
+            console.log("Scrubbed "+path);
+        }else{
+            fs.removeSync(path);
+            console.log("Scrubbed "+path);
+        }
+    });
+
+    updateCacheFromSiteList();
+
+    fs.watch(commander.sitelist, {persistent:true, encoding:'utf8'},_=>{
+        setTimeout(()=>updateCacheFromSiteList(),1500);
+    });
+
+    watchRootDir(commander.root);
+}
+
+function updateCacheFromSiteList(){
+    if(!fs.existsSync(commander.sitelist)){
+        console.log("updateCacheFromSiteList : Site list does not exist");
+        return;
+    }
+
+    // read urls/change booleans
     let data = fs.readFileSync(commander.sitelist, 'utf8');
-    let urls = data.trim().split("\n");
-    urls.forEach(u=>{
-        let folderpath = commander.root+"/"+u.replace("https://", "");
+    let urlsAndChanges = data.trim().split("\n");
+
+    urlsAndChanges.forEach(uc=>{
+        let [url, change] = uc.split("\t");
+        if(!url){
+            return;
+        }
+        console.log("Change site : "+url);
+        console.log("Change site : "+change);
+        let folderpath = commander.root+"/"+url.replace("https://", "");
+        let filepath = folderpath+"/index-https.html";
+
+        // if url changed, try to delete file
+        if(JSON.parse(change)){
+            if(fs.existsSync(filepath)){
+                fs.removeSync(filepath);
+            }
+        }
+        // otherwise try to create folder
         if(!fs.existsSync(folderpath)){
             fs.mkdirSync(folderpath,{recursive:true});
         }
-        console.log("CHECKSITELIST : "+u);
-        // recursiveWatchAndCss(folderpath);
+        console.log("CHECKSITELIST : "+url);
     });
-    setTimeout(()=>checkSiteList(), 1800000)
 }
 
-setTimeout(()=>checkSiteList(), 5000);
+setInterval(()=>updateCacheFromSiteList(), 3600000);
 
 
 })();

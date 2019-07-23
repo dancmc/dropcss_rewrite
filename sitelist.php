@@ -10,30 +10,40 @@
 
 register_activation_hook('/var/www/basc/wp-content/plugins/sitelist/sitelist.php', 'my_activation');
 
-function gen_sitelist() {
-	error_log("gen");
-	$pages = get_pages(); 
+function gen_sitelist($trigger) {
+	error_log("gen_sitelist");
+
+
 	$fp = fopen('/var/www/basc/sitelist.txt', 'w');
-	foreach ( $pages as $page ) {
-    fwrite($fp, get_page_link( $page->ID ) . "\n");
+
+
+    $pages = get_pages();
+    foreach ( $pages as $page ) {
+        $page_id = $page->ID;
+        $page_edited = ($trigger == $page_id) ? 'true' : 'false';
+        fwrite($fp, get_page_link( $page_id ) . "\t" . $page_edited . "\n");
   	}
   	$posts = get_posts(); 
   	foreach ( $posts as $post ) {
-    fwrite($fp, get_permalink( $post ) . "\n");
+        $post_id = $post->ID;
+        $post_edited = ($trigger == $post_id) ? 'true' : 'false';
+        fwrite($fp, get_permalink( $post_id ) . "\t" . $post_edited . "\n");
   	}
+
   	fclose($fp);
 }
 
 add_action('regenerate_sitelist', 'gen_sitelist');
+add_action( 'save_post', 'gen_sitelist' );
 
 function my_activation() {
     if (! wp_next_scheduled ( 'regenerate_sitelist' )) {
     	error_log("scheduling");
-	wp_schedule_event(time()+2000, 'hourly', 'regenerate_sitelist');
+	wp_schedule_event(time(), 'hourly', 'regenerate_sitelist', array(null));
     }
+
     error_log("sss");
 }
-
 
 
 
