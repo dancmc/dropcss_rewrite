@@ -1,0 +1,21 @@
+{
+  "name": "dropcss_rewrite",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dropcss_execute.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^2.20.0",
+    "dropcss": "^1.0.14",
+    "express": "^4.17.1",
+    "html-minifier": "^4.0.0",
+    "immutable": "^4.0.0-rc.12",
+    "node-fetch": "^2.6.0",
+    "node-html-parser": "^1.1.16",
+    "puppeteer": "^1.18.1"
+  }
+}
