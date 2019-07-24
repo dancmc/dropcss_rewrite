@@ -191,6 +191,16 @@ class PromiseQueue {
     async function processCssHtml(url, fileToReplace) {
         console.log("processCssHtml : " + url + " " + fileToReplace);
 
+        // check if this is a forms page (should not be indexed)
+        let isForm = false;
+        notices.forEach(n=>{
+
+           if(n.category==="forms" && n.url===(url+"/")){
+               isForm = true;
+               console.log("ISFORM")
+           }
+        });
+
         await startBrowser();
         const page = await browser.newPage();
         if (auth) {
@@ -287,6 +297,12 @@ class PromiseQueue {
         // EXTRACT NON-CSS TAGS FROM HEAD
         // extract tags that are not stylesheets, or are fonts, and convert all to string
         let filteredHeadString = "";
+
+        // if forms page, prevent from being indexed
+        if(isForm){
+            filteredHeadString+='<meta name="robots" content="noindex">';
+        }
+
         root.querySelector("head").childNodes.forEach(c => {
 
             if (!c.tagName /* for text nodes */ || (c.tagName !== 'style' && !/rel=["|']stylesheet["|']/.test(c.rawAttrs)) || c.rawAttrs.includes("font")) {
