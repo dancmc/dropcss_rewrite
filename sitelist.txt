@@ -1,10 +1,1 @@
-https://dancmc.io/about-us/	false
-https://dancmc.io/contact/	false
-https://dancmc.io/	true
-https://dancmc.io/notices/	false
-https://dancmc.io/services/	false
-https://dancmc.io/volunteer/	false
-https://dancmc.io/achieve-your-goals-in-lesser-time/	false
-https://dancmc.io/become-a-successful-person-with-gravida-nibh/	false
-https://dancmc.io/5-signs-of-a-good-speaker/	false
-https://dancmc.io/becoming-a-great-conversationalist/	false
+[{"url":"https:\/\/dancmc.io\/about-us\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/contact\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/notices\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/services\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/volunteer\/","type":"page","edited":"false"},{"url":"https:\/\/dancmc.io\/form-1\/","type":"post","title":"Form #1","edited":"false","category":"forms","date":"2019-07-24 22:44:56"},{"url":"https:\/\/dancmc.io\/program-1\/","type":"post","title":"Holiday Program #1","edited":"false","category":"holiday-programs","date":"2019-07-24 22:44:26"},{"url":"https:\/\/dancmc.io\/notice-1\/","type":"post","title":"Notice\/Letter #1","edited":"false","category":"notices","date":"2018-12-27 09:57:01"}]
