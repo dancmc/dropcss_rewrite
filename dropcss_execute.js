@@ -2,13 +2,13 @@ const HTMLParser = require('node-html-parser');
 const express = require('express');
 const expressApp = express();
 const puppeteer = require('puppeteer');
-const fetch = require('node-fetch');
-const {Headers} = require('node-fetch');
+const { default:fetch,Headers} = require('node-fetch');
 const dropcss = require('dropcss');
 const fs = require('fs-extra');
 const minify = require('html-minifier').minify;
 const {List, Map} = require('immutable');
 const commander = require('commander');
+const devices = require('puppeteer/DeviceDescriptors');
 
 
 commander
@@ -72,6 +72,8 @@ class PromiseQueue {
 
     async function startBrowser() {
         if (browser === null) {
+            let args = [];
+            args.push(`--window-size=425,500`);
             browser = await puppeteer.launch({headless: true});
             let pages = await browser.pages();
             const numberOfOpenPages = pages.length;
@@ -104,6 +106,13 @@ class PromiseQueue {
         response.send('Killing\n');
 
         setTimeout(() => process.kill(process.pid, 'SIGTERM'), 100)
+
+    });
+
+    expressApp.get("/forceupdate", (request, response) => {
+        response.send('Updating....\n');
+
+        updateCacheFromSiteList(true);
 
     });
     const server = expressApp.listen(port, (err) => {
@@ -159,9 +168,21 @@ class PromiseQueue {
                 console.log("rewriteHtmlFile : Error getting url, ended");
                 return;
             }
-            promiseQueue.addPromise(processCssHtml, url, file);
+            // rewrite both mobile and desktop
+            let mobileFile = "";
+            let desktopFile = "";
+            if(file.includes("index-https-mobile")){
+                mobileFile = file;
+                desktopFile = file.replace("index-https-mobile", "index-https-desktop");
+            }
+            if(file.includes("index-https-desktop")){
+                mobileFile = file.replace("index-https-desktop", "index-https-mobile");
+                desktopFile = file;
+            }
+            promiseQueue.addPromise(processCssHtml, url, mobileFile);
+            promiseQueue.addPromise(processCssHtml, url, desktopFile);
 
-            console.log("rewriteHtmlFile : Processed " + file);
+            console.log("rewriteHtmlFile : Queued " + file);
         } else {
             console.log("rewriteHtmlFile : Error, file has already been rewritten")
         }
@@ -169,7 +190,7 @@ class PromiseQueue {
 
 
     function urlFromPath(file) {
-        if (!file.endsWith("index-https.html")) {
+        if (!file.endsWith("index-https-desktop.html") && !file.endsWith("index-https-mobile.html")) {
             console.log("urlFromPath : Error, not index html file");
             return;
         }
@@ -191,6 +212,8 @@ class PromiseQueue {
     async function processCssHtml(url, fileToReplace) {
         console.log("processCssHtml : " + url + " " + fileToReplace);
 
+
+
         // check if this is a forms page (should not be indexed)
         let isForm = false;
         notices.forEach(n=>{
@@ -203,6 +226,16 @@ class PromiseQueue {
 
         await startBrowser();
         const page = await browser.newPage();
+
+        if(fileToReplace.includes("index-https-mobile")){
+            const iPhone = devices['iPhone 6'];
+            await page.emulate(iPhone);
+        }
+        // await page.setViewport({
+        //     width: 425,
+        //     height: 500,
+        //     deviceScaleFactor: 1,
+        //   });
         if (auth) {
             console.log("Waiting for auth");
             await page.authenticate({username: "admin", password: "admin"});
@@ -507,6 +540,7 @@ class PromiseQueue {
                 } else {
                     console.log("reading dir " + f);
                     // process each of the folder's contents
+                    // add subdirs to processing queue
                     fs.readdirSync(f, {encoding: 'utf8', withFileTypes: true}).forEach(child => {
                         let childpath = f + "/" + child.name;
                         if (child.isDirectory()) {
@@ -514,7 +548,8 @@ class PromiseQueue {
                             filesToProcess = filesToProcess.push(childpath);
                         }
                     });
-                    rewriteHtmlFile(f + "/" + "index-https.html");
+                    // rewrite html files (desktop or mobile will trigger rewriting of both)
+                    rewriteHtmlFile(f + "/" + "index-https-desktop.html");
                     let watcher = fs.watch(f, {persistent: true, encoding: 'utf8'}, function (ev, file) {
                         changeDetected(ev, f + "/" + file);
                     });
@@ -577,13 +612,8 @@ class PromiseQueue {
         // empty the cache root
         fs.readdirSync(rootDir, {encoding: 'utf8', withFileTypes: true}).forEach(f => {
             let path = rootDir + "/" + f.name;
-            if (f.isDirectory()) {
-                fs.removeSync(path);
-                console.log("Scrubbed " + path);
-            } else {
-                fs.removeSync(path);
-                console.log("Scrubbed " + path);
-            }
+            fs.removeSync(path);
+            console.log("Scrubbed " + path);
         });
 
         updateCacheFromSiteList();
@@ -595,7 +625,7 @@ class PromiseQueue {
         watchRootDir(commander.root);
     }
 
-    function updateCacheFromSiteList() {
+    function updateCacheFromSiteList(force=false) {
         if (!fs.existsSync(commander.sitelist)) {
             console.log("updateCacheFromSiteList : Site list does not exist");
             return;
@@ -613,21 +643,25 @@ class PromiseQueue {
         jsonArray.forEach(o => {
             let url = o.url;
             // should always mark notices page for rewrite
-            let changed = o.edited || url.endsWith("/notices");
+            let changed = o.edited || url.endsWith("/notices") || force;
 
             if (!url) {
                 return;
             }
 
-            console.log("updateCacheFromSiteList : " + o.toString());
+            console.log("updateCacheFromSiteList : " + JSON.stringify(o));
 
             let folderpath = commander.root + "/" + url.replace("https://", "");
-            let filepath = folderpath + "/index-https.html";
+            let filepathDesktop = folderpath + "/index-https-desktop.html";
+            let filepathMobile = folderpath + "/index-https-mobile.html";
 
             // if url changed, try to delete file
             if (changed) {
-                if (fs.existsSync(filepath)) {
-                    fs.removeSync(filepath);
+                if (fs.existsSync(filepathDesktop)) {
+                    fs.removeSync(filepathDesktop);
+                }
+                if (fs.existsSync(filepathMobile)) {
+                    fs.removeSync(filepathMobile);
                 }
             }
             // otherwise try to create folder
