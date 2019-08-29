@@ -15,6 +15,7 @@
     "fs-extra": "^8.1.0",
     "html-minifier": "^4.0.0",
     "immutable": "^4.0.0-rc.12",
+    "lodash": "^4.17.15",
     "node-fetch": "^2.6.0",
     "node-html-parser": "^1.1.16",
     "puppeteer": "^1.18.1"

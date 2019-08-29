@@ -2,13 +2,14 @@ const HTMLParser = require('node-html-parser');
 const express = require('express');
 const expressApp = express();
 const puppeteer = require('puppeteer');
-const { default:fetch,Headers} = require('node-fetch');
+const { default: fetch, Headers } = require('node-fetch');
 const dropcss = require('dropcss');
 const fs = require('fs-extra');
 const minify = require('html-minifier').minify;
-const {List, Map} = require('immutable');
+const { List, Map } = require('immutable');
 const commander = require('commander');
 const devices = require('puppeteer/DeviceDescriptors');
+const lodash = require('lodash');
 
 
 commander
@@ -40,7 +41,7 @@ class PromiseQueue {
     }
 
     addPromise(fn, ...params) {
-        this.queue = this.queue.push({fn, params});
+        this.queue = this.queue.push({ fn, params });
 
         if (this.idle) {
             this.executePromise();
@@ -54,7 +55,7 @@ class PromiseQueue {
             let p = this.queue.first();
 
             this.queue = this.queue.shift();
-            p.fn(...p.params).then(() => {
+            p.fn(...p.params).finally(() => {
                 this.idle = true;
                 this.executePromise();
             });
@@ -68,13 +69,14 @@ class PromiseQueue {
     const promiseQueue = new PromiseQueue();
     let notices = List([]);
     let browser = null;
+    let inProgress = false;
 
 
     async function startBrowser() {
         if (browser === null) {
             let args = [];
             args.push(`--window-size=425,500`);
-            browser = await puppeteer.launch({headless: true});
+            browser = await puppeteer.launch({ headless: true });
             let pages = await browser.pages();
             const numberOfOpenPages = pages.length;
             console.log("Pages : " + numberOfOpenPages);
@@ -89,16 +91,18 @@ class PromiseQueue {
         if (browser !== null) {
             let pages = await browser.pages();
             const numberOfOpenPages = pages.length;
-            if (numberOfOpenPages === 0) {
+            if (!inProgress) {
                 console.log("Closing Browser");
                 await browser.close();
                 browser = null;
+            } else {
+                console.log(`${numberOfOpenPages} pages open, cannot close browser`);
             }
         }
-    }, 120000);
+    }, 60000);
 
 
-// -- SERVER AND PROCESS STUFF --
+    // -- SERVER AND PROCESS STUFF --
 
 
     const port = 9999;
@@ -115,34 +119,43 @@ class PromiseQueue {
         updateCacheFromSiteList(true);
 
     });
-    const server = expressApp.listen(port, (err) => {
-        if (err) {
-            return console.log('something bad happened', err)
-        }
-        console.log(`server is listening on ${port}`)
-    });
 
-// kill entire app when SIGTERM received  
+    let server = null;
+    setTimeout(() => {
+        server = expressApp.listen(port, (err) => {
+            if (err) {
+                return console.log('something bad happened', err)
+            }
+            console.log(`server is listening on ${port}`)
+        });
+    }, 2500)
+
+
+    // kill entire app when SIGTERM received  
     process.on('SIGTERM', () => {
-        server.close(() => {
-            console.log('Server terminated')
-        });
-        foldersWatched.map((v, k) => {
-            v.close();
-        });
         if (browser !== null) {
             browser.close().then(() => {
                 console.log("Browser Closed");
-                process.exit();
             });
         }
+
+        foldersWatched.map((v, k) => {
+            v.close();
+        });
+        if (server != null) {
+            server.close(() => {
+                console.log('Server terminated')
+
+            });
+        }
+        setTimeout(() => { process.exit() }, 1500)
     });
 
-// -- HTML AND CSS REWRITING STUFF -- 
+    // -- HTML AND CSS REWRITING STUFF -- 
 
     let foldersWatched = Map({});
 
-    function rewriteHtmlFile(file) {
+    async function rewriteHtmlFile(file) {
 
         if (!file.endsWith("html")) {
             return
@@ -171,18 +184,23 @@ class PromiseQueue {
             // rewrite both mobile and desktop
             let mobileFile = "";
             let desktopFile = "";
-            if(file.includes("index-https-mobile")){
+            if (file.includes("index-https-mobile")) {
                 mobileFile = file;
                 desktopFile = file.replace("index-https-mobile", "index-https-desktop");
             }
-            if(file.includes("index-https-desktop")){
+            if (file.includes("index-https-desktop")) {
                 mobileFile = file.replace("index-https-desktop", "index-https-mobile");
                 desktopFile = file;
             }
-            promiseQueue.addPromise(processCssHtml, url, mobileFile);
-            promiseQueue.addPromise(processCssHtml, url, desktopFile);
 
             console.log("rewriteHtmlFile : Queued " + file);
+
+            // promiseQueue.addPromise(processCssHtml, url, mobileFile);
+            // promiseQueue.addPromise(processCssHtml, url, desktopFile);
+
+            await processCssHtml(url, mobileFile);
+            await processCssHtml(url, desktopFile);
+
         } else {
             console.log("rewriteHtmlFile : Error, file has already been rewritten")
         }
@@ -216,18 +234,18 @@ class PromiseQueue {
 
         // check if this is a forms page (should not be indexed)
         let isForm = false;
-        notices.forEach(n=>{
+        notices.forEach(n => {
 
-           if(n.category==="forms" && n.url===(url+"/")){
-               isForm = true;
-               console.log("ISFORM")
-           }
+            if (n.category === "forms" && n.url === (url + "/")) {
+                isForm = true;
+                console.log("ISFORM")
+            }
         });
 
         await startBrowser();
         const page = await browser.newPage();
 
-        if(fileToReplace.includes("index-https-mobile")){
+        if (fileToReplace.includes("index-https-mobile")) {
             const iPhone = devices['iPhone 6'];
             await page.emulate(iPhone);
         }
@@ -238,7 +256,7 @@ class PromiseQueue {
         //   });
         if (auth) {
             console.log("Waiting for auth");
-            await page.authenticate({username: "admin", password: "admin"});
+            await page.authenticate({ username: "admin", password: "admin" });
         }
         await page.setDefaultNavigationTimeout(10000);
 
@@ -259,7 +277,7 @@ class PromiseQueue {
         const finalisedHtml = await page.content();
         // const styleHrefs = await page.$$eval('link[rel=stylesheet]', els => Array.from(els).map(s => s.href));
 
-        const finalisedRoot = HTMLParser.parse(finalisedHtml, {script: true, style: true, pre: true});
+        const finalisedRoot = HTMLParser.parse(finalisedHtml, { script: true, style: true, pre: true });
         try {
             let dc = finalisedRoot.querySelector("head").querySelector("dropcss") || finalisedRoot.querySelector("body").querySelector("dropcss");
             if (dc) {
@@ -286,31 +304,31 @@ class PromiseQueue {
 
         await Promise.all(styleHrefs.map(async href => {
 
-                // hack to maintain order of styles in head
-                if (!href.startsWith("http")) {
-                    return href;
-                }
-
-                let response = await fetch(href);
-                let css = await response.text();
-                console.log("GotCSS");
-
-                let start = +new Date();
-
-                let clean = dropcss({
-                    css,
-                    html: finalisedHtml, // ......... remember that when passing object param without explicit key, the variable name becomes the key, so not putting html: will cause dropcss library to throw a fit
-                });
-
-                // console.log({
-                //     stylesheet: href,
-                //     cleanCss: clean.css,
-                //     elapsed: +new Date() - start,
-                // });
-                console.log("Stylesheet in original html : " + href);
-
-                return clean.css;
+            // hack to maintain order of styles in head
+            if (!href.startsWith("http")) {
+                return href;
             }
+
+            let response = await fetch(href);
+            let css = await response.text();
+            console.log("GotCSS");
+
+            let start = +new Date();
+
+            let clean = dropcss({
+                css,
+                html: finalisedHtml, // ......... remember that when passing object param without explicit key, the variable name becomes the key, so not putting html: will cause dropcss library to throw a fit
+            });
+
+            // console.log({
+            //     stylesheet: href,
+            //     cleanCss: clean.css,
+            //     elapsed: +new Date() - start,
+            // });
+            console.log("Stylesheet in original html : " + href);
+
+            return clean.css;
+        }
         )).then(css => finalCss = css);
 
 
@@ -324,7 +342,7 @@ class PromiseQueue {
         // });
 
         // GET HTML
-        let root = HTMLParser.parse(originalHtml, {script: true, style: true, pre: true}); // parse html from original (pre-evaluated) html file
+        let root = HTMLParser.parse(originalHtml, { script: true, style: true, pre: true }); // parse html from original (pre-evaluated) html file
         // actually is bad idea to use the puppeteer provided html, cos that is after javascript acts on it
 
         // EXTRACT NON-CSS TAGS FROM HEAD
@@ -332,8 +350,8 @@ class PromiseQueue {
         let filteredHeadString = "";
 
         // if forms page, prevent from being indexed
-        if(isForm){
-            filteredHeadString+='<meta name="robots" content="noindex">';
+        if (isForm) {
+            filteredHeadString += '<meta name="robots" content="noindex">';
         }
 
         root.querySelector("head").childNodes.forEach(c => {
@@ -375,7 +393,7 @@ class PromiseQueue {
         root.querySelector("head").set_content(filteredHeadString);
 
         // if this is notices page, generate relevant lists and insert in root
-        if(fileToReplace.includes("/notices/")){
+        if (fileToReplace.includes("/notices/")) {
             await insertNoticesHtml(root);
         }
 
@@ -414,7 +432,7 @@ class PromiseQueue {
         `;
 
         // holiday list should have title of post plus link
-        let holidayList = notices.filter(o=> o.category.toLowerCase() === "holiday-programs");
+        // let holidayList = notices.filter(o=> o.category.toLowerCase() === "holiday-programs");
         let holidayProgramsHtml = `
              <h5>Holiday Programs</h5>
              <ul>
@@ -423,7 +441,7 @@ class PromiseQueue {
         `;
 
         // forms list should have title of form plus link
-        let formList = notices.filter(o=> o.category.toLowerCase() === "forms");
+        // let formList = notices.filter(o=> o.category.toLowerCase() === "forms");
         let formsHtml = `
              <h5>Forms</h5>
              <ul>
@@ -431,75 +449,75 @@ class PromiseQueue {
              </ul>    
         `;
 
-        let totalHtml =  noticesHtml+holidayProgramsHtml+formsHtml;
+        let totalHtml = noticesHtml + holidayProgramsHtml + formsHtml;
 
-        dom.querySelectorAll("h5").forEach(h=>{
-            if(h.rawText.toLowerCase().startsWith("recent")){
+        dom.querySelectorAll("h5").forEach(h => {
+            if (h.rawText.toLowerCase().startsWith("recent")) {
                 h.parentNode.set_content(totalHtml);
             }
         })
     }
 
-    function generateNoticeListHtml(){
+    function generateNoticeListHtml() {
         let html = "";
         notices
-            .filter(o=> o.category.toLowerCase() === "notices")
-            .forEach(o=>{
-               html+=`<li><a href="${o.url}">${o.title}</a></li>`
+            .filter(o => o.category.toLowerCase() === "notices")
+            .forEach(o => {
+                html += `<li><a href="${o.url}">${o.title}</a></li>`
             });
         return html;
     }
 
-    function generateHolidayListHtml(){
+    function generateHolidayListHtml() {
         let html = "";
         notices
-            .filter(o=> o.category.toLowerCase() === "holiday-programs")
-            .forEach(o=>{
-                html+=`<li><a href="${o.url}">${o.title}</a></li>`
+            .filter(o => o.category.toLowerCase() === "holiday-programs")
+            .forEach(o => {
+                html += `<li><a href="${o.url}">${o.title}</a></li>`
             });
         return html;
     }
 
-    async function generateFormListHtml(){
+    async function generateFormListHtml() {
         let html = "";
         let forms = await Promise.all(
             notices
-            .filter(o=> o.category.toLowerCase() === "forms")
-            .map(async o => {
+                .filter(o => o.category.toLowerCase() === "forms")
+                .map(async o => {
 
-                let headers = new Headers();
-                headers.set('Authorization', 'Basic ' + Buffer.from("admin:admin").toString('base64'));
-                let response = await fetch(o.url,{headers});
-                let html = await response.text();
-                const root = HTMLParser.parse(html, {script: true, style: true, pre: true});
-                try {
-                    let fileBlock = root.querySelector(".wp-block-file");
-                    let aBlock = fileBlock.querySelector("a");
+                    let headers = new Headers();
+                    headers.set('Authorization', 'Basic ' + Buffer.from("admin:admin").toString('base64'));
+                    let response = await fetch(o.url, { headers });
+                    let html = await response.text();
+                    const root = HTMLParser.parse(html, { script: true, style: true, pre: true });
+                    try {
+                        let fileBlock = root.querySelector(".wp-block-file");
+                        let aBlock = fileBlock.querySelector("a");
 
-                    return {title:aBlock.rawText, url:aBlock.attributes["href"]};
-                }catch(e){
-                    return {title: "", url: ""};
+                        return { title: aBlock.rawText, url: aBlock.attributes["href"] };
+                    } catch (e) {
+                        return { title: "", url: "" };
+                    }
                 }
+                ));
+        forms.forEach(f => {
+            if (f.title) {
+                html += `<li><a href="${f.url}">${f.title}</a></li>`
             }
-        ));
-        forms.forEach(f=>{
-           if(f.title){
-               html+=`<li><a href="${f.url}">${f.title}</a></li>`
-           }
         });
         return html;
     }
 
 
-// Set root dir to watch (supercache)
+    // Set root dir to watch (supercache)
     function watchRootDir(rootDir) {
 
         if (!fs.existsSync(rootDir)) {
-            fs.mkdirSync(rootDir, {recursive: true});
+            fs.mkdirSync(rootDir, { recursive: true });
         }
 
         // watch the root dir for sub directory changes only
-        let rootWatcher = fs.watch(rootDir, {persistent: true, encoding: 'utf8'}, function (ev, file) {
+        let rootWatcher = fs.watch(rootDir, { persistent: true, encoding: 'utf8' }, function (ev, file) {
             if (ev === 'rename') {
                 console.log("watchRootDir : " + file);
                 setTimeout(() => {
@@ -514,7 +532,7 @@ class PromiseQueue {
         console.log("Root dir watcher set");
 
         // kick start process by running css function on all existing cached routes
-        fs.readdirSync(rootDir, {encoding: 'utf8', withFileTypes: true}).forEach(f => {
+        fs.readdirSync(rootDir, { encoding: 'utf8', withFileTypes: true }).forEach(f => {
             if (f.isDirectory()) {
                 console.log("subdir found " + f.name);
                 recursiveWatchAndCss(rootDir + "/" + f.name);
@@ -523,7 +541,7 @@ class PromiseQueue {
     }
 
 
-// recursively set a watch on each folder, and also run the dropcss function for that folder/route
+    // recursively set a watch on each folder, and also run the dropcss function for that folder/route
     function recursiveWatchAndCss(folder) {
 
         // but dropcss function MUST check for whether changed index file was result of dropcss
@@ -535,31 +553,35 @@ class PromiseQueue {
             let f = filesToProcess.first();
             filesToProcess = filesToProcess.shift();
             if (fs.lstatSync(f).isDirectory()) {
+
+                console.log("reading dir " + f);
+                // process each of the folder's contents
+                // add subdirs to processing queue
+                fs.readdirSync(f, { encoding: 'utf8', withFileTypes: true }).forEach(child => {
+                    let childpath = f + "/" + child.name;
+                    if (child.isDirectory()) {
+                        console.log("adding subdir " + childpath);
+                        filesToProcess = filesToProcess.push(childpath);
+                    }
+                });
+                // rewrite html files (desktop or mobile will trigger rewriting of both)
+                rewriteHtmlFile(f + "/" + "index-https-desktop.html");
+
+                // watch subdirs
                 if (foldersWatched.has(f)) {
                     console.log("recursiveWatchAndCss : already watching folder " + f);
                 } else {
-                    console.log("reading dir " + f);
-                    // process each of the folder's contents
-                    // add subdirs to processing queue
-                    fs.readdirSync(f, {encoding: 'utf8', withFileTypes: true}).forEach(child => {
-                        let childpath = f + "/" + child.name;
-                        if (child.isDirectory()) {
-                            console.log("adding subdir " + childpath);
-                            filesToProcess = filesToProcess.push(childpath);
-                        }
-                    });
-                    // rewrite html files (desktop or mobile will trigger rewriting of both)
-                    rewriteHtmlFile(f + "/" + "index-https-desktop.html");
-                    let watcher = fs.watch(f, {persistent: true, encoding: 'utf8'}, function (ev, file) {
+                    let watcher = fs.watch(f, { persistent: true, encoding: 'utf8' }, function (ev, file) {
                         changeDetected(ev, f + "/" + file);
                     });
                     foldersWatched = foldersWatched.set(f, watcher);
                 }
+
             }
         }
     }
 
-// when a file change is detected
+    // when a file change is detected
     function changeDetected(ev, file) {
         setTimeout(() => {
 
@@ -577,15 +599,17 @@ class PromiseQueue {
                 }
                 recursiveWatchAndCss(file);
             } else if (!isDirectory) {
-                // if file created/changed, run dropcss function for this file
-                rewriteHtmlFile(file);
+                // if file deleted, run dropcss function for this file
+                if (!fs.existsSync(file)) {
+                    rewriteHtmlFile(file);
+                }
             }
         }, 1000);
 
     }
 
 
-    initialiseSiteList();
+    await initialiseSiteList();
 
     /*
         1. On first program run, delete everything and start over, don't know what is out of date :
@@ -599,33 +623,45 @@ class PromiseQueue {
 
 
      */
-    function initialiseSiteList() {
+    const debouncedUpdateCacheFromSiteList = lodash.debounce(updateCacheFromSiteList, 2000, {maxWait:5000});
+
+    async function initialiseSiteList() {
         if (!fs.existsSync(commander.sitelist)) {
             console.log("checkSiteList : Site list does not exist");
             return;
         }
         let rootDir = commander.root;
         if (!fs.existsSync(rootDir)) {
-            fs.mkdirSync(rootDir, {recursive: true});
+            fs.mkdirSync(rootDir, { recursive: true });
         }
 
         // empty the cache root
-        fs.readdirSync(rootDir, {encoding: 'utf8', withFileTypes: true}).forEach(f => {
+        fs.readdirSync(rootDir, { encoding: 'utf8', withFileTypes: true }).forEach(f => {
             let path = rootDir + "/" + f.name;
             fs.removeSync(path);
             console.log("Scrubbed " + path);
         });
 
-        updateCacheFromSiteList();
+        await updateCacheFromSiteList(true);
 
-        fs.watch(commander.sitelist, {persistent: true, encoding: 'utf8'}, _ => {
-            setTimeout(() => updateCacheFromSiteList(), 1500);
-        });
+        if (!foldersWatched.has(commander.sitelist)) {
+            let watch = fs.watch(commander.sitelist, { persistent: true, encoding: 'utf8' }, type=> {
+                console.log("WATCHER TRIGGERED "+type);
+                setTimeout(() => debouncedUpdateCacheFromSiteList(), 1500);
+            });
+            foldersWatched.set(commander.sitelist, watch);
+        }
 
-        watchRootDir(commander.root);
+
+        // watchRootDir(commander.root);
     }
 
-    function updateCacheFromSiteList(force=false) {
+
+
+    async function updateCacheFromSiteList(force = false) {
+
+        inProgress = true;
+
         if (!fs.existsSync(commander.sitelist)) {
             console.log("updateCacheFromSiteList : Site list does not exist");
             return;
@@ -640,10 +676,13 @@ class PromiseQueue {
         // add all posts to notices list
         notices = notices.push(...jsonArray.filter(o => o.type === "post"));
 
-        jsonArray.forEach(o => {
+        console.log(jsonArray)
+
+        for (i = 0; i < jsonArray.length; i++) {
+            let o = jsonArray[i];
             let url = o.url;
             // should always mark notices page for rewrite
-            let changed = o.edited || url.endsWith("/notices") || force;
+            let changed = o.edited ==="true" || url.endsWith("/notices/") || force;
 
             if (!url) {
                 return;
@@ -663,14 +702,17 @@ class PromiseQueue {
                 if (fs.existsSync(filepathMobile)) {
                     fs.removeSync(filepathMobile);
                 }
+                await rewriteHtmlFile(filepathDesktop);
             }
-            // otherwise try to create folder
+            // create folder if doesn't exist yet
             if (!fs.existsSync(folderpath)) {
-                fs.mkdirSync(folderpath, {recursive: true});
+                console.log("Making directory "+folderpath);
+                fs.mkdirSync(folderpath, { recursive: true });
+                await rewriteHtmlFile(filepathDesktop);
             }
+        }
 
-        });
-
+        inProgress = false
 
     }
 
